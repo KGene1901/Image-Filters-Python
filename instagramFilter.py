@@ -6,10 +6,9 @@ Submodule: Image Processing
 ##############################
 import cv2 as cv
 import numpy as np
-import sys
 import math
-import matplotlib.pyplot as plt
-import argparse
+import random
+from argparse import ArgumentParser
 ##############################
 
 ### Problem 1: Light Leak and Rainbow Light Leak ###
@@ -17,7 +16,7 @@ import argparse
 def gamma_correct(coeff):
     return np.array([((i / 255.0) ** coeff) * 255 for i in np.arange(0, 256)]).astype("uint8")
 
-def light_leak_filter(inputImg, darkCoeff = 2.5, blendCoeff = 1, option = 1):
+def problem1(inputImg, darkCoeff=2.5, blendCoeff=1, option=1):
     imgCopy = np.copy(inputImg)
     light_mask = cv.imread('./mask2.jpg', cv.IMREAD_COLOR)
     gamma_correction = gamma_correct(darkCoeff) # creates a gamma correction lookup table
@@ -31,73 +30,96 @@ def light_leak_filter(inputImg, darkCoeff = 2.5, blendCoeff = 1, option = 1):
 #####################################################
 
 ### Problem 2: Pencil/Charcoal Effect ###
-    
-def gaussianBlur(img, sigma=3):
-    imgCopy = np.copy(img)
-    imgCopy = np.asarray(imgCopy)
-    filter_size = 2 * int(3 * sigma + 0.5) + 1 # may want to change this
-    gaussian_mask = np.zeros((filter_size, filter_size), np.float32)
-    filter_size_split = filter_size // 2
-    k_size = 30
-    k_horizontal = np.zeros((k_size, k_size))
-    
-    for x in range(-filter_size_split, filter_size_split+1):
-        for y in range(-filter_size_split, filter_size_split+1):
-            eq_part1 = 2*np.pi*(sigma**2)
-            eq_part2 = np.exp(-(x**2 + y**2)/(2* sigma**2))
-            gaussian_mask[x+filter_size_split, y+filter_size_split] = (1/eq_part1)*eq_part2
-    
-    filtered_img = np.zeros_like(imgCopy, dtype=np.float32)
-    filtered_img = cv.filter2D(imgCopy, -1, gaussian_mask)
+# https://medium.com/@akumar5/computer-vision-gaussian-filter-from-scratch-b485837b6e09 <== Gaussian Blur Example
+# https://www.askaswiss.com/2016/01/how-to-create-pencil-sketch-opencv-python.html
 
-    k_horizontal[int((k_size - 1) / 2), :] = np.ones(k_size)
-    k_horizontal = k_horizontal / k_size
-    motion_blur = cv.filter2D(filtered_img.astype(np.uint8), -1, k_horizontal)
+def add_salt_and_pepper(img, prob=0.5):
+    output = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+    rows, cols = output.shape
+    threshold = 1 - prob
 
+    for x in range (rows):
+        for y in range (cols):
+            random_val = random.random()
+            if random_val > threshold:
+                output[x, y] = 255
+            elif random_val < prob:
+                output[x, y] = 0
+            else:
+                output[x, y] = output[x, y]
+
+    return output
+
+def gaussian_noise(img):
+    noise_mask = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+    cv.randn(noise_mask, 200, 10)
+    noise_mask = apply_motion_blur(noise_mask, 2)
+    return noise_mask
+
+def random_uniform_noise(img):
+    output = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+    cv.randu(output, 0, 255)
+    apply_motion_blur(output, 1)
+    return output
+
+def apply_motion_blur(img, dir):
+    k_size = 100
+    kernel = np.zeros((k_size, k_size))
+
+    # horizontal
+    if dir == 1:
+        kernel[int((k_size - 1) / 2), :] = np.ones(k_size)
+    # vertical
+    elif dir == 2:
+        kernel[:, int((k_size - 1) / 2)] = np.ones(k_size)
+
+    kernel /= k_size
+    motion_blur = cv.filter2D(img.astype(np.uint8), -1, kernel)
     return motion_blur
-    
-# def dodge(img, noise_mask):
-#     w, h = img.shape[:2]
-#     output = np.zeros((w, h), np.uint8)
 
-#     for i in range(w):
-#         for j in range(h):
-#             if noise_mask[i][j] == 255:
-#                 output[i][j] = 255
-#             else:
-#                 temp = (img[i][j] << 8) / (255 - noise_mask)
+def dodge_naive(img, noise_mask):
+    w, h = img.shape[:2]
+    output = np.zeros((w, h), np.uint8)
 
-#                 if temp[i][j] > 255:
-#                     temp[i][j] = 255
-#                     output[i][j] = temp[i][j]
+    for i in range(w):
+        for j in range(h):
+            if noise_mask[i][j] == 255:
+                output[i][j] = 255
+            else:
+                temp = (img[i][j] << 8) / (255 - noise_mask)
 
-    # return output
+                if temp[i][j] > 255:
+                    temp[i][j] = 255
+                    output[i][j] = temp[i][j]
 
-def dodge(image, mask):
-  return cv.divide(image, 255-mask, scale=256)
+    return output
 
-    # https://medium.com/@akumar5/computer-vision-gaussian-filter-from-scratch-b485837b6e09 <== Gaussian Blur Example
-    # https://www.askaswiss.com/2016/01/how-to-create-pencil-sketch-opencv-python.html
-
-def pencil_charcoal_filter(inputImg, selection, blending):
+def problem2(inputImg, mode=1, blending=0.75):
     imgCopy = np.copy(inputImg)
     grayscale_img = cv.cvtColor(imgCopy, cv.COLOR_BGR2GRAY)
     alpha = blending
     beta = 1 - alpha
-    img_blurred = gaussianBlur(grayscale_img, 15)
-    # filtered_img = dodge(grayscale_img, filtered_img)
-    img_blended = np.uint8((alpha*grayscale_img) + (beta*img_blurred))
-    img_blended = cv.merge((img_blended, img_blended, img_blended))
-    blue, green, red = cv.split(img_blended)
+    # img_blurred = gaussianBlur(grayscale_img, 5)
+    # filtered_img = cv.divide(grayscale_img, 255-img_blurred, scale=256) # efficient dodging technique
 
-    if selection == 1:
-        np.multiply(green, 0.80, out=green, casting='unsafe')
-        filtered_img = cv.merge([blue, green, red])
-        return filtered_img
+    if mode == 1:
+        noise = add_salt_and_pepper(grayscale_img, 0.5)
+        noise = apply_motion_blur(noise, 1)
+        blended_img = np.uint8((alpha*grayscale_img) + (beta*noise))
+        return blended_img
 
-    elif selection == 2:
-        np.multiply(green, 0.80, out=green, casting='unsafe')
-        np.multiply(red, 0.80, out=green, casting='unsafe')
+    elif mode == 2:
+        noise = add_salt_and_pepper(grayscale_img, 0.5)
+        noise = apply_motion_blur(noise, 1)
+
+        red = np.uint8((alpha*grayscale_img) + (beta*gaussian_noise(grayscale_img)))
+        green = np.uint8((alpha*grayscale_img) + (beta*random_uniform_noise(grayscale_img)))
+        blue =  np.copy(grayscale_img)
+        np.multiply(red, 0.6, out=red, casting='unsafe')
+        np.multiply(green, 0.5, out=green, casting='unsafe')
+        np.multiply(blue, 0, out=blue, casting='unsafe')
+        blended_img = cv.merge([blue, green, red])
+        return blended_img
 
     else:
         print('Invalid selection')
@@ -150,7 +172,7 @@ def beautify(img):
 
     ## use univariate spline from scipy to map 
 
-def warm_beauty_filter(inputImg, blur_amt=1):
+def problem3(inputImg, blur_amt=1):
     imgCopy = np.copy(inputImg)
     filtered_img = median_filter(imgCopy, blur_amt)
     beautified_img = beautify(inputImg)
@@ -177,17 +199,9 @@ def low_pass_filter(img):
     outputImg = cv.magnitude(outputImg[:,:,0], outputImg[:,:,1])
     return outputImg
 
-
-def face_swirl_filter(inputImg, swirl_strength=2, swirl_radius=100):
-    imgCopy = np.copy(inputImg)
-
-    ## Pre-filtering
-    b, g, r = cv.split(imgCopy)
-    # b, g, r = low_pass_filter(b), low_pass_filter(g), low_pass_filter(r)
-    filtered_img = cv.merge([b, g, r])
-
-    ## Swirl Image
-    r, c = inputImg.shape[0], inputImg.shape[1]
+def warp_img(filtered_img, swirl_strength, swirl_radius):
+    outputImg = np.copy(filtered_img)
+    r, c = filtered_img.shape[0], filtered_img.shape[1]
     center_r, center_c = r//2 , c//2 
 
     for i in range(r):
@@ -248,10 +262,10 @@ def face_swirl_filter(inputImg, swirl_strength=2, swirl_radius=100):
                 q21x = q22x
                 q21y = q11y
 
-                top_left = imgCopy[q11y][q11x]
-                bottom_left = imgCopy[q12y][q12x]
-                top_right = imgCopy[q21y][q21x]
-                bottom_right = imgCopy[q22y][q22x]
+                top_left = filtered_img[q11y][q11x]
+                bottom_left = filtered_img[q12y][q12x]
+                top_right = filtered_img[q21y][q21x]
+                bottom_right = filtered_img[q22y][q22x]
 
                 b1, g1, r1 = top_left ## q11
                 b2, g2, r2 = bottom_left ## q12
@@ -291,25 +305,91 @@ def face_swirl_filter(inputImg, swirl_strength=2, swirl_radius=100):
                 P_green = max(0, P_green)
 
                 final_pixel = [P_blue, P_green, P_red]
-                filtered_img[i][j] = final_pixel
+                outputImg[i][j] = final_pixel
 
-    return filtered_img
+    return outputImg
+
+def problem4(inputImg, swirl_strength=1.5, swirl_radius=140):
+    imgCopy = np.copy(inputImg)
+
+    ## Pre-filtering
+    b, g, r = cv.split(imgCopy)
+    # b, g, r = low_pass_filter(b), low_pass_filter(g), low_pass_filter(r)
+    filtered_img = cv.merge([b, g, r])
+
+    ## Swirl image 
+    face_swirl_img = warp_img(filtered_img, swirl_strength, swirl_radius)
+
+    ## Inverse swirl
+
+
+    ## Find the difference
+    # img_diff = face_swirl_inv - face_swirl_img
+
+    return face_swirl_img
 
 #############################
 
-if __name__ == '__main__':
-    windowName = 'Processed Image'
-    inputImg = cv.imread('./sample_input_2.jpg', cv.IMREAD_COLOR) ## need to add option to take in sys.argv[1] for input image and use built-in img as default ##
+def parse_arguments():
+    parser = ArgumentParser(description='Allows for selection of different filters available for a provided image.')
 
-    ## will need to include some CLI here for user ## https://www.pyimagesearch.com/2015/10/05/opencv-gamma-correction/
+    parser.add_argument('-i', '--in_img',
+                        type=str,
+                        help='Provide image (path to file) to be processed/filtered'
+                        )
+    parser.add_argument('-f', '--filter',
+                        type=int,
+                        choices=[1, 2, 3, 4],
+                        default=0,
+                        help='Filter selection'
+                        )
+    parser.add_argument('-p', '--params',
+                        metavar='Parameters',
+                        type=float,
+                        nargs='+',
+                        help='Parameters for chosen filter function'
+                        )
+
+    return parser.parse_args()
+
+def main():
+    args = parse_arguments()
+    windowName = 'Processed Image'
+    inputImg = cv.imread(args.in_img, cv.IMREAD_COLOR)
 
     if not inputImg is None:
-        # cv.namedWindow(windowName)
+        cv.namedWindow(windowName)
         flag = True
-        # outputImg = light_leak_filter(inputImg, 2.5, 1, 1)
-        # outputImg = pencil_charcoal_filter(inputImg, 1, 0.3)
-        # outputImg = warm_beauty_filter(inputImg, 1)
-        outputImg = face_swirl_filter(inputImg)
+        params = args.params
+        if not params:
+            params = []
+
+        if args.filter == 1:
+            if len(params) < 3:
+                print('\nInsufficient parameters provided ... Using defaults')
+                outputImg = problem1(inputImg)
+            else:
+                outputImg = problem1(inputImg, params[0], params[1], params[2])
+        elif args.filter == 2:
+            if len(params) < 2:
+                print('\nInsufficient parameters provided ... Using defaults')
+                outputImg = problem2(inputImg)
+            else:
+                outputImg = problem2(inputImg, params[0], params[1])
+        elif args.filter == 3:
+            if len(params) < 1:
+                print('\nInsufficient parameters provided ... Using defaults')
+                outputImg = problem3(inputImg)
+            else:
+                outputImg = problem3(inputImg, params[0])            
+        elif args.filter == 4:
+            if len(params) < 2:
+                print('\nInsufficient parameters provided ... Using defaults')
+                outputImg = problem4(inputImg)
+            else:
+                outputImg = problem4(inputImg, params[0], params[1])
+        else:
+            print('\nInvalid selection')
 
         while flag:
             # cv.imshow('Input Image', inputImg)
@@ -320,6 +400,10 @@ if __name__ == '__main__':
                 flag = False;
 
     else:
-        print('Image cannot be loaded')
+        print('\nImage cannot be loaded')
 
     cv.destroyAllWindows()
+
+if __name__ == '__main__':
+    main()
+    
